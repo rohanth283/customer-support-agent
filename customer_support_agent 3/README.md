@@ -1,84 +1,100 @@
-# Customer Support Agent
+# Customer Support Agent Demo
 
-A local demonstration of the six-module, stateful LangGraph workflow described in the accompanying paper. It routes flight, hotel, car-rental, policy, and general requests, and requires explicit approval before a cancellation is executed.
+A browser demo of the six-module customer-support workflow described in the project paper. It uses LangGraph to route travel requests to flight, hotel, car-rental, policy, and general-support specialists. Cancellations require confirmation before the mock booking is changed.
 
-The browser demo and command-line evaluation use mock in-memory bookings and a small keyword-based policy collection. They do not contact real travel services. This checkout is configured to use the local Ollama model `llama3.1:latest`; the deterministic rule-based mode is available without any model server or API key.
+The demo runs on Windows, macOS, and Linux with Python 3.10 or newer. It uses sample in-memory bookings and local policy text; it does not connect to real airlines, hotels, or car-rental systems. The checked-in configuration uses Ollama locally. A deterministic rule-based mode and optional Gemini/OpenAI providers are also available.
 
-The Python application is portable across macOS, Windows, and Linux with Python 3.10 or newer. Ollama is a separate application and model runtime, installed outside Python. Model performance depends on the hardware available on the computer.
+## Install on a new computer
 
-## Paper architecture in this project
+### 1. Install prerequisites
 
-| Paper module | Implementation |
-| --- | --- |
-| 1. Conversation state and context | `state.py`; `update_context` records messages and the graph trace |
-| 2. Intent and sentiment triage | `triage` in `graph_proposed.py`; model interface in `llm.py` |
-| 3. Specialist router | Conditional LangGraph edges to flight, hotel, car, policy, or general specialists |
-| 4. Tool execution and human approval | `tools/backend.py`; cancellation is blocked until `user_approved` is true |
-| 5. Response and policy grounding | Specialist tool results and retrieved policy passages are formatted into a response |
-| 6. Escalation and outcome logging | The final graph node sets `escalated` and retains resolution/trace fields |
+- Install Python 3.10 or newer.
+- Install [Ollama](https://ollama.com/download) for your operating system. Ollama is a separate application; it is not installed by `pip`.
+- Have several gigabytes of free disk space for the local model. Model performance depends on the computer's available memory and processor/GPU.
 
-The local implementation intentionally keeps the paper's mock/offline configuration reproducible. It does not yet include persistent checkpoints, semantic/vector policy retrieval, authenticated live service APIs, or production authorization.
-
-## Install and start
-
-1. Install Python 3.10 or newer and Ollama for your operating system from [ollama.com/download](https://ollama.com/download).
-2. In a terminal, install the local model and check that Ollama can serve it:
+### 2. Clone this repository
 
 ```bash
-ollama pull llama3.1:latest
-ollama list
+git clone https://github.com/rohanth283/customer-support-agent.git
+cd customer-support-agent
 ```
 
-Keep the Ollama app running. If its local API is not already running, start it in a separate terminal with `ollama serve`.
+### 3. Create and activate a Python environment
 
-3. In Terminal or PowerShell, move into the project directory and create a Python virtual environment:
+Create the environment from the project folder:
 
 ```bash
-cd customer-support-agent
 python -m venv .venv
 ```
 
-Activate it with the command for your shell:
+Activate it using the command for your terminal:
 
 ```bash
 # macOS / Linux (bash or zsh)
 source .venv/bin/activate
 
-# Windows PowerShell (run this instead of the line above)
+# Windows PowerShell
 .\.venv\Scripts\Activate.ps1
 ```
 
-4. Install Python packages and copy the sample settings file:
+If Windows blocks activation, you can skip activation and use `.venv\Scripts\python.exe` in place of `python` in the commands below.
+
+### 4. Install Python dependencies
 
 ```bash
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-On macOS/Linux, copy the sample settings with `cp .env.example .env`; on Windows PowerShell use `Copy-Item .env.example .env`. The checked-in `.env.example` selects Ollama and `llama3.1:latest`. `.env` is ignored by Git.
+The requirements file pins the LangGraph packages used by this project. Ollama calls use Python's standard library, so no Ollama Python package is required.
 
-5. Start the browser demo:
+### 5. Download and start the local model
+
+```bash
+ollama pull llama3.1:latest
+ollama list
+```
+
+Keep the Ollama application running. On macOS and Windows, use the Ollama app. On Linux, if the Ollama service is not already running, start it in a separate terminal with:
+
+```bash
+ollama serve
+```
+
+The sample model setting is in `.env.example`. Copy it to `.env`:
+
+```bash
+# macOS / Linux
+cp .env.example .env
+
+# Windows PowerShell
+Copy-Item .env.example .env
+```
+
+The local Ollama configuration uses `http://127.0.0.1:11434` and `llama3.1:latest`. If you choose a different Ollama model, pull it with `ollama pull <model-name>` and set `OLLAMA_MODEL` to that exact name in `.env`. No cloud API key is needed for Ollama.
+
+### 6. Start the browser demo
+
+From the project folder, with the Python environment active:
 
 ```bash
 python server.py --port 8001
 ```
 
-Open <http://127.0.0.1:8001>. To stop the server, press `Ctrl+C` in its terminal. To leave the virtual environment, run `deactivate`.
+Open [http://127.0.0.1:8001](http://127.0.0.1:8001). The header identifies the selected model. Stop the server with `Ctrl+C`. If port 8001 is busy, choose another port, such as `8002`, and open that address instead.
 
-The browser shows the six-step execution trace and shared intent, specialist, sentiment, urgency, booking, and resolution state. Try these demo inputs:
+## Try the demo
 
-- `Check my flight BLR-DEL-01`
-- `How long does a refund take?`
-- `Cancel my flight BLR-DEL-01` (then click **Confirm cancellation** or **Keep booking**)
-- `I need a rental car in Mumbai`
+- `Check my flight BLR-DEL-01` — retrieves a sample flight booking.
+- `How long does a refund take?` — retrieves the sample refund policy.
+- `Cancel my flight BLR-DEL-01` — asks for approval before cancellation. Choose **Confirm cancellation** to execute the mock action, or **Keep booking** to decline.
+- `I need a rental car in Mumbai` — creates a sample car booking.
 
-Click **New conversation** to reset the in-memory sample bookings.
+The right panel shows the graph trace and shared state, including intent, sentiment, urgency, selected specialist, booking ID, and resolution. **New conversation** resets the mock booking database.
 
-## Language-model modes
+## Model settings
 
-### Local Ollama (no cloud key)
-
-Ollama serves the local model at `http://127.0.0.1:11434`. The `.env` file selects it; start the Ollama app/service before starting the web server. Check installed models with `ollama list`.
+The `.env.example` file selects the local Ollama model:
 
 ```dotenv
 LLM_PROVIDER=ollama
@@ -87,11 +103,15 @@ OLLAMA_MODEL=llama3.1:latest
 OLLAMA_TIMEOUT=180
 ```
 
-The adapter calls Ollama's local `/api/chat` endpoint with streaming disabled. See the [Ollama API documentation](https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-chat-completion). No API key or cloud access is needed for model inference.
+The app uses Ollama's local `/api/chat` endpoint with streaming disabled. See the [Ollama API documentation](https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-chat-completion).
 
-### Gemini (optional cloud model)
+To use the deterministic fallback instead, set this in `.env`:
 
-Set these entries in `.env`, then restart the server:
+```dotenv
+LLM_PROVIDER=rule
+```
+
+Gemini is optional. To enable it, set the provider and key in your local `.env`, then restart the server:
 
 ```dotenv
 LLM_PROVIDER=gemini
@@ -99,59 +119,45 @@ GEMINI_API_KEY="your-key"
 GEMINI_MODEL=gemini-3.8-flash
 ```
 
-The key stays on the server and is not sent to the browser. Google documents the API-key header and `generateContent` request [here](https://ai.google.dev/gemini-api/docs/generate-content/api-key).
+The `.env` file is ignored by Git. Keep API keys there; do not put them in the browser or commit them. The Gemini adapter calls Google's `generateContent` API. See [Gemini API key documentation](https://ai.google.dev/gemini-api/docs/generate-content/api-key).
 
-OpenAI mode is also available if `langchain-openai` is installed and `OPENAI_API_KEY` is set:
-
-```bash
-.venv/bin/python -m pip install langchain-openai
-```
-
-Then set these entries in `.env`:
-
-```dotenv
-LLM_PROVIDER=openai
-OPENAI_API_KEY="paste-your-key-here"
-```
-
-Start the server:
+OpenAI is also supported. Install its optional package and configure `OPENAI_API_KEY` and `LLM_PROVIDER=openai` in `.env`:
 
 ```bash
-.venv/bin/python server.py
+python -m pip install langchain-openai
 ```
 
-Use `LLM_PROVIDER=rule` to explicitly force the offline model even when API keys are present. The `.env` file is ignored by Git. Do not paste API keys into the browser or commit them to the repository.
+Restart the server after changing `.env` so the selected provider is loaded.
 
 ## Run the evaluation
 
 ```bash
-.venv/bin/python evaluate.py
+python evaluate.py
 ```
 
-The script evaluates the proposed graph and simpler single-graph baseline over 25 synthetic requests. It writes per-case results and aggregate metrics to `results/proposed_results.csv`, `results/baseline_results.csv`, and `results/summary.json`.
+This compares the proposed graph with a simpler baseline over 25 synthetic support requests. It writes case-level CSV files and aggregate metrics to `results/`.
 
-The attached paper reports 76% intent accuracy and 64% completion for its proposed system. The currently checked-out repository's saved `summary.json` instead reports 100% intent accuracy and 92% completion. These figures do not match; present the output produced by the version you actually run and identify which set of results you are showing.
+The paper reports 76% intent accuracy and 64% completion for the proposed system. The repository's saved evaluation reports 100% and 92%, respectively. These figures differ; when presenting results, state which model/configuration and output you ran.
 
-## Interactive Python example
+## How the project maps to the paper
 
-```python
-from graph_proposed import PROPOSED_GRAPH
+| Paper module | Project implementation |
+| --- | --- |
+| Conversation state and context | `state.py` and `update_context` in `graph_proposed.py` |
+| Intent and sentiment triage | `triage` in `graph_proposed.py`; provider adapters in `llm.py` |
+| Specialist routing | Conditional LangGraph edges in `route` |
+| Tool execution and human approval | Domain specialists in `graph_proposed.py`; sample tools in `tools/backend.py` |
+| Response and policy grounding | Result formatting and policy retrieval |
+| Escalation and logging | Final graph node sets resolution and escalation state |
 
-result = PROPOSED_GRAPH.invoke({"user_message": "Cancel my flight BLR-DEL-01"})
-print(result["response"])  # requests approval; does not cancel yet
-
-result["user_approved"] = True
-result["approval_replay"] = True
-result = PROPOSED_GRAPH.invoke(result)
-print(result["response"])  # invokes the mock cancellation tool
-```
+This is a local demonstration, not a production support service. It does not include persistent conversation checkpoints, semantic/vector policy retrieval, authentication, or live service APIs. The booking database and policy text are mock data.
 
 ## Project files
 
-- `graph_proposed.py` — six-module LangGraph agent.
-- `graph_baseline.py` — single-assistant baseline used for comparison.
-- `state.py` — shared typed graph state.
-- `llm.py` — offline, local Ollama, Gemini REST, and optional OpenAI language-model adapters.
-- `tools/backend.py` — mock booking tools and policy passages.
-- `server.py` and `web/` — local browser demonstration.
-- `evaluate.py` and `tests/test_conversations.py` — evaluation runner and synthetic cases.
+- `graph_proposed.py` — six-module LangGraph workflow.
+- `graph_baseline.py` — single-graph comparison baseline.
+- `state.py` — shared graph state.
+- `llm.py` — rule-based, Ollama, Gemini, and optional OpenAI adapters.
+- `tools/backend.py` — mock bookings and policy passages.
+- `server.py` and `web/` — local browser demo.
+- `evaluate.py` and `tests/test_conversations.py` — evaluation runner and sample cases.
