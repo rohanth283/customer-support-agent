@@ -23,6 +23,37 @@ every node calls `get_llm()` and only depends on the .classify_intent(),
 
 import os
 import re
+import json
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+
+def _load_local_env_file() -> None:
+    """Load simple KEY=VALUE entries from this project’s ignored .env file."""
+    env_path = Path(__file__).with_name(".env")
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return
+    for line in lines:
+        entry = line.strip()
+        if not entry or entry.startswith("#"):
+            continue
+        if entry.startswith("export "):
+            entry = entry[7:].lstrip()
+        key, separator, value = entry.partition("=")
+        key = key.strip()
+        if not separator or not key or not key.replace("_", "").isalnum():
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
+_load_local_env_file()
 
 
 KNOWN_INTENTS = {
@@ -35,6 +66,33 @@ _INTENT_FOR_DOMAIN = {
     "hotel": "hotel_booking",
     "car": "car_rental",
 }
+
+
+def _extract_intent(response: str) -> str:
+    text = response.strip().lower()
+    for label in sorted(KNOWN_INTENTS, key=len, reverse=True):
+        if re.search(rf"(?<![a-z0-9]){re.escape(label)}(?![a-z0-9])", text):
+            return label
+    return "general_query"
+
+
+def _extract_sentiment_urgency(response: str):
+    text = response.strip().lower()
+    sentiment_match = re.search(r"\b(positive|neutral|negative)\b", text)
+    urgency_match = re.search(r"\b(low|medium|high)\b", text)
+    sentiment = sentiment_match.group(1) if sentiment_match else "neutral"
+    urgency = urgency_match.group(1) if urgency_match else "low"
+    return sentiment, urgency
+
+
+def _preserve_grounded_facts(source: str, response: str) -> str:
+    """Use the deterministic source text if a model drops IDs or numeric facts."""
+    booking_ids = re.findall(r"\b(?:[A-Z]{3}-[A-Z]{3}-\d{2}|HTL-\d{4}|CAR-\d{3}|FLT-\d{4})\b", source, re.I)
+    numeric_facts = re.findall(r"\b\d+(?:-\d+)?(?:%|kg)?\b", source, re.I)
+    response_lower = response.lower()
+    if any(value.lower() not in response_lower for value in booking_ids + numeric_facts):
+        return source
+    return response
 
 
 class BaseLLM:
@@ -50,6 +108,8 @@ class BaseLLM:
 
 class RuleBasedLLM(BaseLLM):
     """Deterministic offline stand-in (see module docstring)."""
+
+    provider_name = "Rule-based (offline)"
 
     POLICY_KEYWORDS = ["policy", "refund", "refunds", "baggage", "allowance",
                        "reschedule", "rescheduling", "rule", "rules", "fee", "fees"]
@@ -136,6 +196,7 @@ class OpenAILLM(BaseLLM):
     def __init__(self, model: str = "gpt-4o-mini"):
         from langchain_openai import ChatOpenAI
         self.client = ChatOpenAI(model=model, temperature=0)
+        self.provider_name = f"OpenAI ({model})"
 
     def classify_intent(self, text: str) -> str:
         resp = self.client.invoke(
@@ -144,32 +205,200 @@ class OpenAILLM(BaseLLM):
             f"cancel_flight, cancel_hotel, cancel_car, cancel_generic, general_query. "
             f"Reply with only the label.\n\nMessage: {text}"
         )
-        label = re.sub(r"[^a-z_]", "", resp.content.strip().lower())
-        return label if label in KNOWN_INTENTS else "general_query"
+        return _extract_intent(resp.content)
 
     def classify_sentiment(self, text: str):
         resp = self.client.invoke(
             f"Classify sentiment (positive/neutral/negative) and urgency "
             f"(low/medium/high) of this message as 'sentiment,urgency'.\n\n{text}"
         )
-        parts = resp.content.strip().split(",")
-        sentiment = parts[0].strip().lower()
-        urgency = parts[1].strip().lower() if len(parts) > 1 else "low"
-        if sentiment not in {"positive", "neutral", "negative"}:
-            sentiment = "neutral"
-        if urgency not in {"low", "medium", "high"}:
-            urgency = "low"
-        return sentiment, urgency
+        return _extract_sentiment_urgency(resp.content)
 
     def generate_response(self, prompt: str) -> str:
         resp = self.client.invoke(prompt)
-        return resp.content.strip()
+        return _preserve_grounded_facts(prompt, resp.content.strip())
+
+
+class OllamaLLM(BaseLLM):
+    """Local Ollama adapter using its native, non-streaming chat endpoint."""
+
+    def __init__(self, model: str | None = None, base_url: str | None = None):
+        self.model = model or os.environ.get("OLLAMA_MODEL", "llama3.1:latest")
+        self.base_url = (base_url or os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")).rstrip("/")
+        self.timeout = float(os.environ.get("OLLAMA_TIMEOUT", "180"))
+        self.provider_name = f"Ollama ({self.model})"
+
+    def _generate(self, instruction: str, prompt: str, max_tokens: int = 256) -> str:
+        url = f"{self.base_url}/api/chat"
+        body = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": instruction},
+                {"role": "user", "content": prompt},
+            ],
+            "stream": False,
+            "options": {"temperature": 0, "num_predict": max_tokens},
+        }
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Ollama returned HTTP {exc.code}: {detail[:500]}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError(
+                f"Could not reach Ollama at {self.base_url}. Start the Ollama app/service and try again."
+            ) from exc
+        try:
+            return payload["message"]["content"].strip()
+        except (KeyError, TypeError) as exc:
+            raise RuntimeError("Ollama returned no chat message. Check that the model is installed.") from exc
+
+    def classify_intent(self, text: str) -> str:
+        labels = ", ".join(sorted(KNOWN_INTENTS))
+        response = self._generate(
+            f"Classify this customer-support request. Reply with exactly one label from: {labels}. "
+            "Questions about policy, fees, refunds, baggage, or rescheduling are policy_query, "
+            "not requests to execute a cancellation.",
+            text,
+            max_tokens=32,
+        )
+        return _extract_intent(response)
+
+    def classify_sentiment(self, text: str):
+        response = self._generate(
+            "Classify sentiment as positive, neutral, or negative and urgency as low, medium, or high. "
+            "Reply only as sentiment,urgency (for example neutral,low).",
+            text,
+            max_tokens=16,
+        )
+        return _extract_sentiment_urgency(response)
+
+    def generate_response(self, prompt: str) -> str:
+        response = self._generate(
+            "You are a concise customer-support agent. Use only the provided tool result or policy passage. "
+            "Do not claim an action was completed unless the provided result confirms it. Preserve every booking ID, "
+            "date, amount, percentage, duration, and other numeric fact exactly.",
+            prompt,
+            max_tokens=256,
+        )
+        return _preserve_grounded_facts(prompt, response)
+
+
+class GeminiLLM(BaseLLM):
+    """Small Gemini REST adapter; keeps the demo installable without an SDK."""
+
+    def __init__(self, model: str | None = None):
+        self.api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not self.api_key:
+            raise RuntimeError("Set GEMINI_API_KEY to use Gemini mode.")
+        self.model = model or os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+        self.provider_name = f"Gemini ({self.model})"
+
+    def _generate(self, instruction: str, prompt: str, max_tokens: int = 256) -> str:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        body = {
+            "system_instruction": {"parts": [{"text": instruction}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0, "maxOutputTokens": max_tokens},
+        }
+        encoded_body = json.dumps(body).encode("utf-8")
+        payload = None
+        for attempt in range(3):
+            request = urllib.request.Request(
+                url,
+                data=encoded_body,
+                headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                retryable = exc.code in {429, 500, 502, 503, 504}
+                if retryable and attempt < 2:
+                    try:
+                        delay = float(exc.headers.get("Retry-After", ""))
+                    except (TypeError, ValueError):
+                        delay = 2 ** (attempt + 1)
+                    time.sleep(min(max(delay, 1), 5))
+                    continue
+                if exc.code == 503:
+                    raise RuntimeError(
+                        "Gemini is temporarily unavailable or at capacity (HTTP 503). "
+                        "Please retry in a little while or select another available model."
+                    ) from exc
+                raise RuntimeError(f"Gemini API returned HTTP {exc.code}: {detail[:500]}") from exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise RuntimeError(f"Could not reach the Gemini API after 3 attempts: {exc}") from exc
+        try:
+            return "".join(
+                part.get("text", "")
+                for part in payload["candidates"][0]["content"]["parts"]
+                if "text" in part
+            ).strip()
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError("Gemini returned no text candidate.") from exc
+
+    def classify_intent(self, text: str) -> str:
+        labels = ", ".join(sorted(KNOWN_INTENTS))
+        response = self._generate(
+            f"Classify the user's customer-support request. Reply with exactly one label from: {labels}. "
+            "A question about policy, fees, refunds, baggage, or rescheduling is policy_query, "
+            "not a request to execute a cancellation.",
+            text,
+            max_tokens=32,
+        )
+        return _extract_intent(response)
+
+    def classify_sentiment(self, text: str):
+        response = self._generate(
+            "Classify sentiment as positive, neutral, or negative and urgency as low, medium, or high. "
+            "Reply only as sentiment,urgency (for example neutral,low).",
+            text,
+            max_tokens=16,
+        )
+        return _extract_sentiment_urgency(response)
+
+    def generate_response(self, prompt: str) -> str:
+        response = self._generate(
+            "You are a concise customer-support agent. Use only the provided tool result or policy passage. "
+            "Do not claim an action was completed unless the provided result confirms it. Preserve every booking ID, "
+            "date, amount, percentage, duration, and other numeric fact exactly.",
+            prompt,
+            max_tokens=256,
+        )
+        return _preserve_grounded_facts(prompt, response)
 
 
 def get_llm() -> BaseLLM:
-    if os.environ.get("OPENAI_API_KEY"):
-        try:
-            return OpenAILLM()
-        except Exception:
-            pass
-    return RuleBasedLLM()
+    requested = os.environ.get("LLM_PROVIDER", "auto").strip().lower()
+    if requested in {"", "auto"}:
+        if os.environ.get("GEMINI_API_KEY"):
+            requested = "gemini"
+        elif os.environ.get("OPENAI_API_KEY"):
+            requested = "openai"
+        else:
+            requested = "rule"
+    if requested in {"rule", "rulebased", "offline"}:
+        return RuleBasedLLM()
+    if requested == "ollama":
+        return OllamaLLM()
+    if requested == "gemini":
+        return GeminiLLM()
+    if requested == "openai":
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise RuntimeError("Set OPENAI_API_KEY to use OpenAI mode.")
+        return OpenAILLM()
+    raise RuntimeError("LLM_PROVIDER must be auto, rule, ollama, gemini, or openai.")

@@ -32,8 +32,13 @@ SENSITIVE_INTENTS = {"cancel_flight", "cancel_hotel", "cancel_car", "cancel_gene
 # ---------------------------------------------------------------- Module 1
 def update_context(state: SupportState) -> SupportState:
     history = state.get("history", [])
-    history = history + [state["user_message"]]
-    return {"history": history}
+    if not state.get("approval_replay"):
+        history = history + [state["user_message"]]
+    return {
+        "history": history,
+        "approval_replay": False,
+        "trace": state.get("trace", []) + ["Context & conversation state"],
+    }
 
 
 # ---------------------------------------------------------------- Module 2
@@ -43,7 +48,13 @@ def triage(state: SupportState) -> SupportState:
     sentiment, urgency = llm.classify_sentiment(text)
     match = BOOKING_ID_RE.search(text)
     booking_id = match.group(0).upper() if match else None
-    return {"intent": intent, "sentiment": sentiment, "urgency": urgency, "booking_id": booking_id}
+    return {
+        "intent": intent,
+        "sentiment": sentiment,
+        "urgency": urgency,
+        "booking_id": booking_id,
+        "trace": state.get("trace", []) + ["Intent & sentiment triage"],
+    }
 
 
 # ---------------------------------------------------------------- Module 3
@@ -101,17 +112,20 @@ def _domain_specialist(state: SupportState, domain: str, search_fn, cancel_fn, b
                 "tool_result": {"ok": False, "message": f"No {domain} booking id found in message."},
                 "needs_approval": False,
                 "specialist": specialist,
+                "trace": state.get("trace", []) + [f"{domain.title()} specialist & tools"],
             }
         if _is_new_booking(state.get("user_message", "")):
             return {
                 "tool_result": book_fn(state.get("user_message", "")),
                 "needs_approval": False,
                 "specialist": specialist,
+                "trace": state.get("trace", []) + [f"{domain.title()} specialist & tools"],
             }
         return {
             "tool_result": {"ok": False, "message": f"No {domain} booking id found in message."},
             "needs_approval": False,
             "specialist": specialist,
+            "trace": state.get("trace", []) + [f"{domain.title()} specialist & tools"],
         }
 
     if is_cancel:
@@ -121,22 +135,26 @@ def _domain_specialist(state: SupportState, domain: str, search_fn, cancel_fn, b
                 "needs_approval": True,
                 "specialist": specialist,
                 "tool_result": {"ok": None, "message": f"Confirmation required to cancel {domain} booking {booking_id}."},
+                "trace": state.get("trace", []) + [f"{domain.title()} specialist & approval gate"],
             }
         result = cancel_fn(booking_id)
-        return {"tool_result": result, "needs_approval": False, "specialist": specialist}
+        return {"tool_result": result, "needs_approval": False, "specialist": specialist,
+                "trace": state.get("trace", []) + [f"{domain.title()} specialist & tools"]}
 
     record = search_fn(booking_id)
     if record is None:
         result = {"ok": False, "message": f"No {domain} booking found with id {booking_id}."}
     else:
         result = {"ok": True, "record": record}
-    return {"tool_result": result, "needs_approval": False, "specialist": specialist}
+    return {"tool_result": result, "needs_approval": False, "specialist": specialist,
+            "trace": state.get("trace", []) + [f"{domain.title()} specialist & tools"]}
 
 
 def policy_specialist(state: SupportState) -> SupportState:
     passage = backend.search_policy(state["user_message"])
     return {"policy_context": passage, "tool_result": {"ok": True, "message": "policy retrieved"},
-            "needs_approval": False, "specialist": "policy_specialist"}
+            "needs_approval": False, "specialist": "policy_specialist",
+            "trace": state.get("trace", []) + ["Policy retrieval"]}
 
 
 def general_specialist(state: SupportState) -> SupportState:
@@ -150,6 +168,7 @@ def general_specialist(state: SupportState) -> SupportState:
         },
         "needs_approval": False,
         "specialist": "general_specialist",
+        "trace": state.get("trace", []) + ["General support specialist"],
     }
 
 
@@ -159,10 +178,10 @@ def generate_response(state: SupportState) -> SupportState:
     result = state.get("tool_result") or {}
 
     if state.get("needs_approval"):
-        response = (
-            "I found the booking. This is a cancellation, which is irreversible - "
-            "please confirm (yes/no) before I proceed."
-        )
+        booking_id = state.get("booking_id") or "the selected booking"
+        domain = (state.get("specialist") or "").removesuffix("_specialist")
+        action = f"{domain.title()} booking {booking_id}" if domain else f"booking {booking_id}"
+        response = f"Please confirm cancellation of {action}. I will not cancel it until you approve."
         resolved = False
     elif intent == "policy_query":
         response = f"Here is our policy: {state.get('policy_context')}"
@@ -177,7 +196,8 @@ def generate_response(state: SupportState) -> SupportState:
         response = result.get("message", "I'm sorry, I could not complete that request.")
         resolved = False
 
-    return {"response": llm.generate_response(response), "resolved": resolved}
+    return {"response": llm.generate_response(response), "resolved": resolved,
+            "trace": state.get("trace", []) + ["Response generation & policy grounding"]}
 
 
 # ---------------------------------------------------------------- Module 6
@@ -185,7 +205,8 @@ def escalate_or_log(state: SupportState) -> SupportState:
     escalate = (
         state.get("sentiment") == "negative" and state.get("urgency") == "high"
     ) or (not state.get("resolved", False) and not state.get("needs_approval", False))
-    return {"escalated": bool(escalate)}
+    return {"escalated": bool(escalate),
+            "trace": state.get("trace", []) + ["Escalation & outcome logging"]}
 
 
 def build_graph():

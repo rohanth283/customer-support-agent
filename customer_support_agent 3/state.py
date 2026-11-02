@@ -5,6 +5,8 @@ class SupportState(TypedDict, total=False):
     # Module 1 - Conversation State & Context Management
     user_message: str
     history: List[str]
+    trace: List[str]
+    approval_replay: bool
 
     # Module 2 - Intent Classification & Sentiment Triage
     intent: str

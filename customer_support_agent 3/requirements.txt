@@ -1,4 +1,4 @@
-langgraph>=1.2.0
-langchain-core>=1.6.0
-# optional - only needed if OPENAI_API_KEY is set to use the production LLM backend
-# langchain-openai>=0.2.0
+# Tested with Python 3.14 on macOS; compatible Python builds are selected by pip.
+# The local Ollama adapter uses only Python's standard library.
+langgraph==1.2.18
+langchain-core==1.7.1

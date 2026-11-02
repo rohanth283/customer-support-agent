@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101521">
+  <title>Customer Support Agent Demo</title>
+  <link rel="stylesheet" href="/web/styles.css">
+  <script src="/web/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">S</span><span>Support Lab</span></div>
+      <button id="new-chat" class="new-chat"><span>＋</span> New conversation</button>
+      <div class="side-section-label">DEMO SCENARIOS</div>
+      <button class="scenario" data-prompt="Check my flight BLR-DEL-01"><span class="scenario-icon flight">↗</span><span><b>Find a booking</b><small>Flight, hotel, or car</small></span></button>
+      <button class="scenario" data-prompt="How long does a refund take?"><span class="scenario-icon policy">▤</span><span><b>Ask about a policy</b><small>Grounded in policy data</small></span></button>
+      <button class="scenario" data-prompt="Cancel my flight BLR-DEL-01"><span class="scenario-icon safe">✓</span><span><b>Safe cancellation</b><small>Requires your approval</small></span></button>
+      <div class="sidebar-spacer"></div>
+      <div class="offline-note"><span class="online-dot"></span><span><b>Local demo</b><small>Mock bookings · no live actions</small></span></div>
+    </aside>
+
+    <main class="main-panel">
+      <header class="topbar">
+        <div class="topbar-title"><span class="mobile-brand">SUPPORT LAB</span><span class="breadcrumb">Customer Support Agent</span><span class="tag">LANGGRAPH DEMO</span></div>
+        <div class="model-indicator"><span class="online-dot"></span><span id="model-name">Loading model…</span></div>
+      </header>
+
+      <div class="workspace">
+        <section class="chat-column">
+          <div class="welcome" id="welcome">
+            <div class="hero-icon"><span>✳</span></div>
+            <div class="eyebrow">YOUR TRAVEL SUPPORT ASSISTANT</div>
+            <h1>How can I help<br>with your trip?</h1>
+            <p>Ask about a booking or travel policy. The agent routes your request to a specialist and shows its decision path.</p>
+            <div class="starter-grid">
+              <button class="starter" data-prompt="Check my flight BLR-DEL-01"><span class="starter-glyph blue">⌕</span><span>Look up a flight<small>Check BLR-DEL-01</small></span><span class="arrow">↗</span></button>
+              <button class="starter" data-prompt="How long does a refund take?"><span class="starter-glyph violet">◷</span><span>Ask a policy question<small>Refund timing</small></span><span class="arrow">↗</span></button>
+              <button class="starter" data-prompt="Cancel my hotel booking HTL-1001"><span class="starter-glyph amber">⌑</span><span>Try safe cancellation<small>Approval required</small></span><span class="arrow">↗</span></button>
+              <button class="starter" data-prompt="I need a rental car in Mumbai"><span class="starter-glyph green">＋</span><span>Book a rental car<small>Creates mock booking</small></span><span class="arrow">↗</span></button>
+            </div>
+          </div>
+          <div id="messages" class="messages" aria-live="polite"></div>
+          <form id="chat-form" class="composer">
+            <textarea id="message-input" rows="1" placeholder="Ask about a booking or policy…" aria-label="Your message"></textarea>
+            <div class="composer-bottom"><span><kbd>Enter</kbd> to send · <kbd>Shift + Enter</kbd> for a new line</span><button id="send-button" type="submit" aria-label="Send message">↑</button></div>
+          </form>
+          <div class="disclaimer">Demo uses sample in-memory data. It does not contact airlines, hotels, or car-rental services.</div>
+        </section>
+
+        <aside class="inspector">
+          <div class="inspector-heading"><div><div class="eyebrow">LIVE TRACE</div><h2>Agent execution</h2></div><span class="pulse-mark"></span></div>
+          <p class="inspector-intro">Follow the six modules that process each request.</p>
+          <ol id="trace-list" class="trace-list">
+            <li class="trace-empty">Send a message to see the graph run.</li>
+          </ol>
+          <div class="inspector-divider"></div>
+          <div class="eyebrow state-eyebrow">SHARED STATE</div>
+          <div class="state-grid">
+            <div class="state-field"><span>Intent</span><b id="state-intent">—</b></div>
+            <div class="state-field"><span>Specialist</span><b id="state-specialist">—</b></div>
+            <div class="state-field"><span>Sentiment</span><b id="state-sentiment">—</b></div>
+            <div class="state-field"><span>Urgency</span><b id="state-urgency">—</b></div>
+            <div class="state-field"><span>Booking ID</span><b id="state-booking">—</b></div>
+            <div class="state-field"><span>Resolved</span><b id="state-resolved">—</b></div>
+          </div>
+          <div id="escalation-banner" class="escalation-banner hidden"><span>!</span><span><b>Human attention suggested</b><small>Escalation flag is set for this turn.</small></span></div>
+          <div class="paper-note"><span class="paper-icon">◈</span><span><b>Paper architecture</b><small>State → triage → specialist → tools → response → escalation</small></span></div>
+        </aside>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
